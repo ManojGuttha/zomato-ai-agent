@@ -41,7 +41,7 @@ async def get_zomato_response(user_input):
     # This ensures Node 20 is pulled and mcp-remote is executed in one shell context
     server_params = StdioServerParameters(
         command="sh", 
-        args=["-c", "npx -y -p node@20 mcp-remote https://mcp-server.zomato.com/mcp"],
+        args=["-c", "npx -y -p node@20 -p mcp-remote -- mcp-remote https://mcp-server.zomato.com/mcp"],
         env=os.environ.copy()
     )
 
