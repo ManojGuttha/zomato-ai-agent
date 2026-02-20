@@ -13,7 +13,7 @@ load_dotenv()
 # --- Page Configuration ---
 st.set_page_config(page_title="Zomato AI Agent", page_icon="🍔", layout="centered")
 
-# 2. API Key Gatekeeper (Multi-user safe)
+# 2. API Key Gatekeeper
 if "openai_api_key" not in st.session_state:
     st.title("🍔 Welcome to Zomato AI Agent")
     st.info("Enter your OpenAI API key to start.")
@@ -37,7 +37,7 @@ if "messages" not in st.session_state:
 async def get_zomato_response(user_input):
     client = OpenAI(api_key=st.session_state.openai_api_key)
     
-    # 🚨 CLOUD FIX: Use 'sh' to tell the Linux server to search for 'npx'
+    # Using 'sh -c' to ensure npx is found in the cloud environment path
     server_params = StdioServerParameters(
         command="sh", 
         args=["-c", "npx -y mcp-remote https://mcp-server.zomato.com/mcp"],
@@ -45,55 +45,58 @@ async def get_zomato_response(user_input):
     )
 
     try:
-        async with stdio_client(server_params) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                
-                tools_resp = await session.list_tools()
-                available_tools = [
-                    {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.inputSchema}}
-                    for t in tools_resp.tools
-                ]
-
-                # Update local message history
-                st.session_state.messages.append({"role": "user", "content": user_input})
-                
-                response = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=st.session_state.messages,
-                    tools=available_tools,
-                )
-
-                response_message = response.choices[0].message
-                
-                if response_message.tool_calls:
-                    # Save OpenAI object as dict for history serializability
-                    st.session_state.messages.append(response_message.model_dump())
+        # Wrap the connection in a 60-second timeout to allow for OAuth redirects
+        async with asyncio.timeout(60): 
+            async with stdio_client(server_params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
                     
-                    for tool_call in response_message.tool_calls:
-                        tool_name = tool_call.function.name
-                        tool_args = json.loads(tool_call.function.arguments)
-                        
-                        with st.status(f"🛠️ Zomato: {tool_name}...", expanded=False):
-                            result = await session.call_tool(tool_name, tool_args)
-                            
-                            st.session_state.messages.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "name": tool_name,
-                                "content": str(result.content),
-                            })
+                    tools_resp = await session.list_tools()
+                    available_tools = [
+                        {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.inputSchema}}
+                        for t in tools_resp.tools
+                    ]
 
-                    final_response = client.chat.completions.create(
+                    # Append user message
+                    st.session_state.messages.append({"role": "user", "content": user_input})
+                    
+                    response = client.chat.completions.create(
                         model="gpt-4o",
                         messages=st.session_state.messages,
+                        tools=available_tools,
                     )
-                    return final_response.choices[0].message.content
-                
-                return response_message.content
 
+                    response_message = response.choices[0].message
+                    
+                    if response_message.tool_calls:
+                        st.session_state.messages.append(response_message.model_dump())
+                        
+                        for tool_call in response_message.tool_calls:
+                            tool_name = tool_call.function.name
+                            tool_args = json.loads(tool_call.function.arguments)
+                            
+                            with st.status(f"🛠️ Zomato: {tool_name}...", expanded=False):
+                                result = await session.call_tool(tool_name, tool_args)
+                                
+                                st.session_state.messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "name": tool_name,
+                                    "content": str(result.content),
+                                })
+
+                        final_response = client.chat.completions.create(
+                            model="gpt-4o",
+                            messages=st.session_state.messages,
+                        )
+                        return final_response.choices[0].message.content
+                    
+                    return response_message.content
+
+    except asyncio.TimeoutError:
+        return "⏳ **Authorization Required**: It looks like Zomato needs you to verify your phone number. Please check for a new tab/window, verify, and then try sending your message again."
     except Exception as e:
-        return f"❌ **Error**: {str(e)}"
+        return f"❌ **Connection Error**: {str(e)}"
 
 # --- UI Loop ---
 st.title("🍔 Zomato AI Agent")
@@ -114,7 +117,6 @@ if prompt := st.chat_input("I want to order pizza..."):
             st.markdown(response)
             st.session_state.messages.append({"role": "assistant", "content": response})
 
-# Sidebar
 with st.sidebar:
     if st.button("Reset Chat"):
         st.session_state.messages = [{"role": "system", "content": "You are a helpful Zomato assistant."}]
