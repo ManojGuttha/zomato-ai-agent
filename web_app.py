@@ -37,79 +37,77 @@ if "messages" not in st.session_state:
 async def get_zomato_response(user_input):
     client = OpenAI(api_key=st.session_state.openai_api_key)
     
+    # 🚨 CLOUD FIX: Use npx to pull Node 20+ temporarily to avoid "File is not defined" error
+    # This solves the undici/node18 incompatibility in Streamlit Cloud
     server_params = StdioServerParameters(
-        command="npx",
-        args=["-y", "mcp-remote", "https://mcp-server.zomato.com/mcp"],
+        command="sh", 
+        args=["-c", "npx -p node@20 npx -y mcp-remote https://mcp-server.zomato.com/mcp"],
         env=os.environ.copy()
     )
 
     try:
-        async with stdio_client(server_params) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                
-                # Fetch tools
-                tools_resp = await session.list_tools()
-                available_tools = [
-                    {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.inputSchema}}
-                    for t in tools_resp.tools
-                ]
-
-                # Append user message
-                st.session_state.messages.append({"role": "user", "content": user_input})
-                
-                # Call OpenAI
-                response = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=st.session_state.messages,
-                    tools=available_tools,
-                )
-
-                response_message = response.choices[0].message
-                
-                # IMPORTANT: Convert tool call object to dictionary for Streamlit history
-                if response_message.tool_calls:
-                    st.session_state.messages.append(response_message.model_dump()) #
+        # Wrap connection in a 60-second timeout for OAuth redirects
+        async with asyncio.timeout(60): 
+            async with stdio_client(server_params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
                     
-                    for tool_call in response_message.tool_calls:
-                        tool_name = tool_call.function.name
-                        tool_args = json.loads(tool_call.function.arguments)
-                        
-                        with st.status(f"🛠️ Zomato: {tool_name}...", expanded=False):
-                            result = await session.call_tool(tool_name, tool_args)
-                            
-                            # Add tool result to history
-                            st.session_state.messages.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "name": tool_name,
-                                "content": str(result.content),
-                            })
+                    tools_resp = await session.list_tools()
+                    available_tools = [
+                        {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.inputSchema}}
+                        for t in tools_resp.tools
+                    ]
 
-                    # Second call to get final text
-                    final_response = client.chat.completions.create(
+                    # Append user message
+                    st.session_state.messages.append({"role": "user", "content": user_input})
+                    
+                    response = client.chat.completions.create(
                         model="gpt-4o",
                         messages=st.session_state.messages,
+                        tools=available_tools,
                     )
-                    return final_response.choices[0].message.content
-                
-                return response_message.content
 
+                    response_message = response.choices[0].message
+                    
+                    if response_message.tool_calls:
+                        st.session_state.messages.append(response_message.model_dump())
+                        
+                        for tool_call in response_message.tool_calls:
+                            tool_name = tool_call.function.name
+                            tool_args = json.loads(tool_call.function.arguments)
+                            
+                            with st.status(f"🛠️ Zomato: {tool_name}...", expanded=False):
+                                result = await session.call_tool(tool_name, tool_args)
+                                
+                                st.session_state.messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "name": tool_name,
+                                    "content": str(result.content),
+                                })
+
+                        final_response = client.chat.completions.create(
+                            model="gpt-4o",
+                            messages=st.session_state.messages,
+                        )
+                        return final_response.choices[0].message.content
+                    
+                    return response_message.content
+
+    except asyncio.TimeoutError:
+        return "⏳ **Auth Required**: Check your browser for a new Zomato login tab, verify, and try again."
     except Exception as e:
         return f"❌ **Error**: {str(e)}"
 
 # --- UI Loop ---
 st.title("🍔 Zomato AI Agent")
 
-# Loop through history
 for msg in st.session_state.messages:
     if msg["role"] == "system": continue
-    # Skip rendering raw tool/tool_call data to keep UI clean
     if msg.get("content") and msg["role"] in ["user", "assistant"]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-# User Input
 if prompt := st.chat_input("I want to order pizza..."):
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -118,10 +116,8 @@ if prompt := st.chat_input("I want to order pizza..."):
         with st.spinner("Talking to Zomato..."):
             response = asyncio.run(get_zomato_response(prompt))
             st.markdown(response)
-            # Save final response as simple dict
             st.session_state.messages.append({"role": "assistant", "content": response})
 
-# Sidebar
 with st.sidebar:
     if st.button("Reset Chat"):
         st.session_state.messages = [{"role": "system", "content": "You are a helpful Zomato assistant."}]
