@@ -37,16 +37,16 @@ if "messages" not in st.session_state:
 async def get_zomato_response(user_input):
     client = OpenAI(api_key=st.session_state.openai_api_key)
     
-    # 🚨 CLOUD FIX: Use npx to pull Node 20+ temporarily to avoid "File is not defined" error
-    # This solves the undici/node18 incompatibility in Streamlit Cloud
+    # 🚨 FINAL CLOUD FIX: Use a simplified sh -c command
+    # This ensures Node 20 is pulled and mcp-remote is executed in one shell context
     server_params = StdioServerParameters(
         command="sh", 
-        args=["-c", "npx -p node@20 npx -y mcp-remote https://mcp-server.zomato.com/mcp"],
+        args=["-c", "npx -y -p node@20 mcp-remote https://mcp-server.zomato.com/mcp"],
         env=os.environ.copy()
     )
 
     try:
-        # Wrap connection in a 60-second timeout for OAuth redirects
+        # 60-second timeout for OAuth redirects
         async with asyncio.timeout(60): 
             async with stdio_client(server_params) as (read, write):
                 async with ClientSession(read, write) as session:
