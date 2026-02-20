@@ -1,0 +1,5 @@
+streamlit
+openai
+mcp
+nest_asyncio
+python-dotenv

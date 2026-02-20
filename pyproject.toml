@@ -1,0 +1,15 @@
+[project]
+name = "mcp-pro"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "gradio>=6.6.0",
+    "httpx[http2]>=0.28.1",
+    "mcp[cli]>=1.26.0",
+    "nest-asyncio>=1.6.0",
+    "openai>=2.21.0",
+    "python-dotenv>=1.2.1",
+    "streamlit>=1.54.0",
+]
