@@ -13,7 +13,7 @@ load_dotenv()
 # --- Page Configuration ---
 st.set_page_config(page_title="Zomato AI Agent", page_icon="🍔", layout="centered")
 
-# 2. API Key Gatekeeper
+# 2. API Key Gatekeeper (Multi-user safe)
 if "openai_api_key" not in st.session_state:
     st.title("🍔 Welcome to Zomato AI Agent")
     st.info("Enter your OpenAI API key to start.")
@@ -37,9 +37,10 @@ if "messages" not in st.session_state:
 async def get_zomato_response(user_input):
     client = OpenAI(api_key=st.session_state.openai_api_key)
     
+    # 🚨 CLOUD FIX: Use 'sh' to tell the Linux server to search for 'npx'
     server_params = StdioServerParameters(
-        command="npx",
-        args=["-y", "mcp-remote", "https://mcp-server.zomato.com/mcp"],
+        command="sh", 
+        args=["-c", "npx -y mcp-remote https://mcp-server.zomato.com/mcp"],
         env=os.environ.copy()
     )
 
@@ -48,17 +49,15 @@ async def get_zomato_response(user_input):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 
-                # Fetch tools
                 tools_resp = await session.list_tools()
                 available_tools = [
                     {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.inputSchema}}
                     for t in tools_resp.tools
                 ]
 
-                # Append user message
+                # Update local message history
                 st.session_state.messages.append({"role": "user", "content": user_input})
                 
-                # Call OpenAI
                 response = client.chat.completions.create(
                     model="gpt-4o",
                     messages=st.session_state.messages,
@@ -67,9 +66,9 @@ async def get_zomato_response(user_input):
 
                 response_message = response.choices[0].message
                 
-                # IMPORTANT: Convert tool call object to dictionary for Streamlit history
                 if response_message.tool_calls:
-                    st.session_state.messages.append(response_message.model_dump()) #
+                    # Save OpenAI object as dict for history serializability
+                    st.session_state.messages.append(response_message.model_dump())
                     
                     for tool_call in response_message.tool_calls:
                         tool_name = tool_call.function.name
@@ -78,7 +77,6 @@ async def get_zomato_response(user_input):
                         with st.status(f"🛠️ Zomato: {tool_name}...", expanded=False):
                             result = await session.call_tool(tool_name, tool_args)
                             
-                            # Add tool result to history
                             st.session_state.messages.append({
                                 "role": "tool",
                                 "tool_call_id": tool_call.id,
@@ -86,7 +84,6 @@ async def get_zomato_response(user_input):
                                 "content": str(result.content),
                             })
 
-                    # Second call to get final text
                     final_response = client.chat.completions.create(
                         model="gpt-4o",
                         messages=st.session_state.messages,
@@ -101,15 +98,12 @@ async def get_zomato_response(user_input):
 # --- UI Loop ---
 st.title("🍔 Zomato AI Agent")
 
-# Loop through history
 for msg in st.session_state.messages:
     if msg["role"] == "system": continue
-    # Skip rendering raw tool/tool_call data to keep UI clean
     if msg.get("content") and msg["role"] in ["user", "assistant"]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-# User Input
 if prompt := st.chat_input("I want to order pizza..."):
     with st.chat_message("user"):
         st.markdown(prompt)
@@ -118,7 +112,6 @@ if prompt := st.chat_input("I want to order pizza..."):
         with st.spinner("Talking to Zomato..."):
             response = asyncio.run(get_zomato_response(prompt))
             st.markdown(response)
-            # Save final response as simple dict
             st.session_state.messages.append({"role": "assistant", "content": response})
 
 # Sidebar
